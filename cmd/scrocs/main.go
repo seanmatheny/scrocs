@@ -47,7 +47,10 @@ func main() {
 		fatalf("open log file: %v", err)
 	}
 	defer logFile.Close()
-	logger := log.New(logFile, "", log.LstdFlags|log.LUTC)
+	// Write to both the application log file and stderr so that the launchd
+	// StandardErrorPath log (~/Library/Logs/scrocs-launchd.log) also receives
+	// all output.
+	logger := log.New(io.MultiWriter(logFile, os.Stderr), "", log.LstdFlags|log.LUTC)
 
 	for _, dir := range []string{cfg.RawDir, cfg.PDFDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -67,24 +70,37 @@ func main() {
 		return
 	}
 
+	ui := newProgressUI()
+
 	logger.Printf("Kindle Scribe detected; starting sync")
+	ui.start("Kindle Scribe detected — connecting and transferring files…")
+
+	ui.updateStep("Connecting", "Establishing MTP connection to Kindle Scribe…")
 	if err := mtpclient.SyncRawKindleFiles(cfg.RawDir, cfg.DevicePattern, logger); err != nil {
 		logger.Printf("sync failed: %v", err)
+		ui.fail(fmt.Sprintf("File transfer failed: %v", err))
 		return
 	}
 
 	state, err := loadImportState(cfg.StateFile)
 	if err != nil {
 		logger.Printf("state load failed: %v", err)
+		ui.fail(fmt.Sprintf("Could not load sync state: %v", err))
 		return
 	}
 
 	rawFiles, err := listRawFiles(cfg.RawDir)
 	if err != nil {
 		logger.Printf("list raw files: %v", err)
+		ui.fail(fmt.Sprintf("Could not list raw files: %v", err))
 		return
 	}
 
+	if len(rawFiles) > 0 {
+		ui.updateStep("Converting", fmt.Sprintf("Converting %d file(s) to PDF…", len(rawFiles)))
+	}
+
+	imported := 0
 	for _, rawFile := range rawFiles {
 		pdfFile, err := convertToPDF(rawFile, cfg.RawDir, cfg.PDFDir, logger)
 		if err != nil {
@@ -101,6 +117,7 @@ func main() {
 			continue
 		}
 
+		ui.updateStep("Importing", fmt.Sprintf("Importing %s into Bear…", filepath.Base(pdfFile)))
 		if err := importPDFToBear(pdfFile); err != nil {
 			logger.Printf("Bear import failed for %s: %v", pdfFile, err)
 			continue
@@ -110,10 +127,16 @@ func main() {
 			continue
 		}
 		state[fileHash] = struct{}{}
+		imported++
 		logger.Printf("Imported %s into Bear", filepath.Base(pdfFile))
 	}
 
 	logger.Printf("Sync complete")
+	if imported > 0 {
+		ui.complete(fmt.Sprintf("Sync complete — %d new file(s) imported into Bear.", imported))
+	} else {
+		ui.complete("Sync complete — no new files to import.")
+	}
 }
 
 func loadConfig() config {
