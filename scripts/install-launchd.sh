@@ -2,14 +2,31 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT_PATH="$REPO_ROOT/scripts/scrocs-sync.sh"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/com.scrocs.sync.plist"
 LOG_PATH="$HOME/Library/Logs/scrocs-launchd.log"
-SCRIPT_PATH_XML="$(printf '%s' "$SCRIPT_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e \"s/'/\\&apos;/g\")"
-LOG_PATH_XML="$(printf '%s' "$LOG_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e \"s/'/\\&apos;/g\")"
+BIN_DIR="$HOME/.local/share/scrocs/bin"
+BIN_PATH="$BIN_DIR/scrocs"
 
-mkdir -p "$PLIST_DIR" "$(dirname "$LOG_PATH")"
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/\"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+mkdir -p "$PLIST_DIR" "$(dirname "$LOG_PATH")" "$BIN_DIR"
+
+echo "Building scrocs binary with native MTP support..."
+if ! (cd "$REPO_ROOT" && go build -tags mtp -o "$BIN_PATH" ./cmd/scrocs); then
+  echo "Build failed. Ensure Go is installed and libusb development headers are available." >&2
+  exit 1
+fi
+
+BIN_PATH_XML="$(xml_escape "$BIN_PATH")"
+LOG_PATH_XML="$(xml_escape "$LOG_PATH")"
 
 cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,8 +38,7 @@ cat > "$PLIST_PATH" <<PLIST
 
     <key>ProgramArguments</key>
     <array>
-      <string>/bin/bash</string>
-      <string>$SCRIPT_PATH_XML</string>
+      <string>$BIN_PATH_XML</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -44,4 +60,4 @@ launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
 launchctl load "$PLIST_PATH"
 
 echo "Installed launchd agent: $PLIST_PATH"
-echo "Script path: $SCRIPT_PATH"
+echo "Binary path: $BIN_PATH"

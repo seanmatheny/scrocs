@@ -7,8 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-      <string>/bin/bash</string>
-      <string>/ABSOLUTE/PATH/TO/scrocs/scripts/scrocs-sync.sh</string>
+      <string>/Users/YOU/.local/share/scrocs/bin/scrocs</string>
     </array>
 
     <key>RunAtLoad</key>
