@@ -9,8 +9,6 @@ RAW_DIR="${SCROCS_RAW_DIR:-$SCROCS_HOME/raw}"
 PDF_DIR="${SCROCS_PDF_DIR:-$SCROCS_HOME/pdf}"
 STATE_FILE="${SCROCS_STATE_FILE:-$SCROCS_HOME/imported.sha256}"
 CONVERTER_BIN="${SCROCS_CONVERTER_BIN:-ebook-convert}"
-MOUNT_BIN="${SCROCS_MOUNT_BIN:-$(command -v mount || true)}"
-UMOUNT_BIN="${SCROCS_UMOUNT_BIN:-$(command -v umount || true)}"
 
 mkdir -p "$SCROCS_HOME" "$MOUNT_POINT" "$RAW_DIR" "$PDF_DIR"
 touch "$LOG_FILE" "$STATE_FILE"
@@ -25,7 +23,16 @@ warn() {
 }
 
 url_encode() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 is required for Bear URL encoding"
+    return 1
+  fi
+
   python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"
+}
+
+is_mounted() {
+  mount | /usr/bin/grep -Fq "on $MOUNT_POINT ("
 }
 
 is_kindle_connected() {
@@ -38,7 +45,7 @@ mount_mtp() {
     return 1
   fi
 
-  if [[ -n "$MOUNT_BIN" ]] && "$MOUNT_BIN" | /usr/bin/grep -Fq "on $MOUNT_POINT ("; then
+  if is_mounted; then
     return 0
   fi
 
@@ -49,11 +56,16 @@ mount_mtp() {
 }
 
 unmount_mtp() {
-  if [[ -n "$MOUNT_BIN" ]] && "$MOUNT_BIN" | /usr/bin/grep -Fq "on $MOUNT_POINT ("; then
-    if [[ -n "$UMOUNT_BIN" ]]; then
-      "$UMOUNT_BIN" "$MOUNT_POINT" >>"$LOG_FILE" 2>&1 || true
+  if is_mounted; then
+    if command -v umount >/dev/null 2>&1; then
+      umount "$MOUNT_POINT" >>"$LOG_FILE" 2>&1 || true
     fi
   fi
+}
+
+file_size() {
+  local path="$1"
+  stat -f '%z' "$path" 2>/dev/null || stat -c '%s' "$path"
 }
 
 sync_raw_files() {
@@ -63,12 +75,14 @@ sync_raw_files() {
   fi
 
   while IFS= read -r -d '' source_file; do
-    local rel_path dest_file
+    local rel_path dest_file source_size dest_size
     rel_path="${source_file#$MOUNT_POINT/}"
     dest_file="$RAW_DIR/$rel_path"
     mkdir -p "$(dirname "$dest_file")"
 
-    if [[ ! -f "$dest_file" || "$source_file" -nt "$dest_file" ]]; then
+    source_size="$(file_size "$source_file")"
+    dest_size="$(file_size "$dest_file" 2>/dev/null || true)"
+    if [[ ! -f "$dest_file" || "$source_file" -nt "$dest_file" || "$source_size" != "$dest_size" ]]; then
       cp "$source_file" "$dest_file"
       log "Synced $rel_path"
     fi
@@ -130,12 +144,22 @@ import_pdf_to_bear() {
 }
 
 main() {
+  local existing_pid
+
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    log "Another sync is already running"
-    exit 0
+    existing_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      log "Another sync is already running"
+      exit 0
+    fi
+
+    warn "Found stale lock; cleaning up"
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR"
   fi
 
-  trap 'unmount_mtp; rmdir "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+  printf '%s\n' "$$" >"$LOCK_DIR/pid"
+  trap 'unmount_mtp; rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
 
   if ! is_kindle_connected; then
     log "Kindle Scribe not detected"
@@ -150,9 +174,8 @@ main() {
 
   sync_raw_files
 
+  local raw_file pdf_file file_hash
   while IFS= read -r -d '' raw_file; do
-    local pdf_file file_hash
-
     if ! pdf_file="$(convert_to_pdf "$raw_file")"; then
       continue
     fi

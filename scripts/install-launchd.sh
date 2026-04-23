@@ -6,6 +6,8 @@ SCRIPT_PATH="$REPO_ROOT/scripts/scrocs-sync.sh"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/com.scrocs.sync.plist"
 LOG_PATH="$HOME/Library/Logs/scrocs-launchd.log"
+SCRIPT_PATH_XML="$(printf '%s' "$SCRIPT_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e \"s/'/\\&apos;/g\")"
+LOG_PATH_XML="$(printf '%s' "$LOG_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e \"s/'/\\&apos;/g\")"
 
 mkdir -p "$PLIST_DIR" "$(dirname "$LOG_PATH")"
 
@@ -20,7 +22,7 @@ cat > "$PLIST_PATH" <<PLIST
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>$SCRIPT_PATH</string>
+      <string>$SCRIPT_PATH_XML</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -30,10 +32,10 @@ cat > "$PLIST_PATH" <<PLIST
     <integer>300</integer>
 
     <key>StandardOutPath</key>
-    <string>$LOG_PATH</string>
+    <string>$LOG_PATH_XML</string>
 
     <key>StandardErrorPath</key>
-    <string>$LOG_PATH</string>
+    <string>$LOG_PATH_XML</string>
   </dict>
 </plist>
 PLIST
