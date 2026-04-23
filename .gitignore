@@ -1,0 +1,7 @@
+# Compiled binaries
+scrocs
+/bin/
+*.test
+
+# OS generated
+.DS_Store
