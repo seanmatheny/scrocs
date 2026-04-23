@@ -27,7 +27,7 @@ cat > "$PLIST_PATH" <<PLIST
     <true/>
 
     <key>StartInterval</key>
-    <integer>45</integer>
+    <integer>300</integer>
 
     <key>StandardOutPath</key>
     <string>$LOG_PATH</string>

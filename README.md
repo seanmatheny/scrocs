@@ -24,17 +24,17 @@ brew install jmtpfs calibre
 
 ## Install
 
-From the repository root (`/home/runner/work/scrocs/scrocs` in this environment):
+From the repository root:
 
 ```bash
-/home/runner/work/scrocs/scrocs/scripts/install-launchd.sh
+./scripts/install-launchd.sh
 ```
 
-This installs `~/Library/LaunchAgents/com.scrocs.sync.plist` and runs sync every 45 seconds in the background.
+This installs `~/Library/LaunchAgents/com.scrocs.sync.plist` and runs sync every 5 minutes in the background.
 
 ## Main script
 
-`/home/runner/work/scrocs/scrocs/scripts/scrocs-sync.sh`
+`./scripts/scrocs-sync.sh`
 
 Useful environment variables:
 

@@ -19,6 +19,11 @@ log() {
   printf '%s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG_FILE"
 }
 
+warn() {
+  printf '%s\n' "$*" >&2
+  log "$*"
+}
+
 url_encode() {
   python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"
 }
@@ -29,7 +34,7 @@ is_kindle_connected() {
 
 mount_mtp() {
   if ! command -v jmtpfs >/dev/null 2>&1; then
-    log "jmtpfs is not installed. Install with: brew install jmtpfs"
+    warn "jmtpfs is not installed. Install with: brew install jmtpfs"
     return 1
   fi
 
@@ -38,7 +43,7 @@ mount_mtp() {
   fi
 
   if ! jmtpfs "$MOUNT_POINT" >>"$LOG_FILE" 2>&1; then
-    log "Unable to mount Kindle over MTP"
+    warn "Unable to mount Kindle over MTP"
     return 1
   fi
 }
@@ -94,7 +99,7 @@ convert_to_pdf() {
   fi
 
   if ! command -v "$CONVERTER_BIN" >/dev/null 2>&1; then
-    log "Converter not found: $CONVERTER_BIN"
+    warn "Converter not found: $CONVERTER_BIN"
     return 1
   fi
 
