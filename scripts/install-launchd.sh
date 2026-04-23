@@ -8,6 +8,15 @@ LOG_PATH="$HOME/Library/Logs/scrocs-launchd.log"
 BIN_DIR="$HOME/.local/share/scrocs/bin"
 BIN_PATH="$BIN_DIR/scrocs"
 
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/\"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
 mkdir -p "$PLIST_DIR" "$(dirname "$LOG_PATH")" "$BIN_DIR"
 
 echo "Building scrocs binary with native MTP support..."
@@ -16,8 +25,8 @@ if ! (cd "$REPO_ROOT" && go build -tags mtp -o "$BIN_PATH" ./cmd/scrocs); then
   exit 1
 fi
 
-BIN_PATH_XML="$(printf '%s' "$BIN_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e "s/'/\\&apos;/g")"
-LOG_PATH_XML="$(printf '%s' "$LOG_PATH" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' -e 's/\"/\\&quot;/g' -e "s/'/\\&apos;/g")"
+BIN_PATH_XML="$(xml_escape "$BIN_PATH")"
+LOG_PATH_XML="$(xml_escape "$LOG_PATH")"
 
 cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -174,7 +174,7 @@ func acquireLock(lockDir string, logger *log.Logger) (func(), error) {
 
 func isKindleConnected() bool {
 	if _, err := exec.LookPath("system_profiler"); err != nil {
-		return true
+		return false
 	}
 	out, err := exec.Command("/usr/sbin/system_profiler", "SPUSBDataType").Output()
 	if err != nil {
@@ -259,9 +259,14 @@ func convertNotebookLikeToPDF(inputFile, outputFile string, logger *log.Logger) 
 	}
 	defer zr.Close()
 
-	var pdfEntry *zip.File
-	var imageEntries []*zip.File
-	for _, f := range zr.File {
+	var pdfEntryIndex = -1
+	type imageEntry struct {
+		Index int
+		Name  string
+		Ext   string
+	}
+	var imageEntries []imageEntry
+	for idx, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
@@ -271,16 +276,16 @@ func convertNotebookLikeToPDF(inputFile, outputFile string, logger *log.Logger) 
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		switch ext {
 		case ".pdf":
-			if pdfEntry == nil {
-				pdfEntry = f
+			if pdfEntryIndex == -1 {
+				pdfEntryIndex = idx
 			}
 		case ".png", ".jpg", ".jpeg":
-			imageEntries = append(imageEntries, f)
+			imageEntries = append(imageEntries, imageEntry{Index: idx, Name: f.Name, Ext: ext})
 		}
 	}
 
-	if pdfEntry != nil {
-		if err := extractZipFileToPath(pdfEntry, outputFile); err != nil {
+	if pdfEntryIndex >= 0 {
+		if err := extractZipFileToPath(zr.File[pdfEntryIndex], outputFile); err != nil {
 			return err
 		}
 		logger.Printf("Converted %s via embedded PDF", filepath.Base(inputFile))
@@ -300,9 +305,8 @@ func convertNotebookLikeToPDF(inputFile, outputFile string, logger *log.Logger) 
 
 	imgPaths := make([]string, 0, len(imageEntries))
 	for i, f := range imageEntries {
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		p := filepath.Join(tempDir, fmt.Sprintf("%06d%s", i, ext))
-		if err := extractZipFileToPath(f, p); err != nil {
+		p := filepath.Join(tempDir, fmt.Sprintf("%06d%s", i, f.Ext))
+		if err := extractZipFileToPath(zr.File[f.Index], p); err != nil {
 			return err
 		}
 		imgPaths = append(imgPaths, p)
@@ -367,13 +371,10 @@ func extractZipFileToPath(zf *zip.File, dest string) error {
 
 func isSafeArchiveName(name string) bool {
 	clean := filepath.Clean(name)
-	if filepath.IsAbs(clean) {
+	if !filepath.IsLocal(clean) {
 		return false
 	}
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return !strings.Contains(clean, string(filepath.Separator)+".."+string(filepath.Separator))
+	return true
 }
 
 func imagesToPDF(images []string, outFile string) error {
@@ -384,7 +385,6 @@ func imagesToPDF(images []string, outFile string) error {
 			ext = "jpeg"
 		}
 		opts := gofpdf.ImageOptions{ImageType: ext, ReadDpi: true}
-		name := "img-" + strings.ReplaceAll(filepath.Base(img), ".", "-")
 		info := pdf.RegisterImageOptions(img, opts)
 		if err := pdf.Error(); err != nil {
 			return err
@@ -394,7 +394,7 @@ func imagesToPDF(images []string, outFile string) error {
 			return fmt.Errorf("invalid image dimensions for %s", img)
 		}
 		pdf.AddPageFormat("P", gofpdf.SizeType{Wd: w, Ht: h})
-		pdf.ImageOptions(name, 0, 0, w, h, false, opts, 0, "")
+		pdf.ImageOptions(img, 0, 0, w, h, false, opts, 0, "")
 	}
 	return pdf.OutputFileAndClose(outFile)
 }
