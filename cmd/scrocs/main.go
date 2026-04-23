@@ -265,6 +265,9 @@ func convertNotebookLikeToPDF(inputFile, outputFile string, logger *log.Logger) 
 		if f.FileInfo().IsDir() {
 			continue
 		}
+		if !isSafeArchiveName(f.Name) {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		switch ext {
 		case ".pdf":
@@ -328,6 +331,9 @@ func isLikelyPDF(path string) bool {
 }
 
 func extractZipFileToPath(zf *zip.File, dest string) error {
+	if !isSafeArchiveName(zf.Name) {
+		return fmt.Errorf("unsafe archive entry: %s", zf.Name)
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -357,6 +363,17 @@ func extractZipFileToPath(zf *zip.File, dest string) error {
 		return err
 	}
 	return nil
+}
+
+func isSafeArchiveName(name string) bool {
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) {
+		return false
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !strings.Contains(clean, string(filepath.Separator)+".."+string(filepath.Separator))
 }
 
 func imagesToPDF(images []string, outFile string) error {

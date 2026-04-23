@@ -4,7 +4,6 @@ package mtpclient
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -169,5 +168,3 @@ func isSafePath(root, candidate string) bool {
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
-
-var _ io.Writer
