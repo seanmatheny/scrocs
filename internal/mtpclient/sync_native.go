@@ -40,8 +40,10 @@ func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger)
 			continue
 		}
 		if !si.IsHierarchical() && !si.IsDCF() {
+			logger.Printf("Skipping storage %d (%q): unsupported filesystem type %d", sid, si.StorageDescription, si.FilesystemType)
 			continue
 		}
+		logger.Printf("Syncing storage %d (%q)", sid, si.StorageDescription)
 		if err := syncFolder(dev, sid, noParentID, "", rawDir, logger); err != nil {
 			logger.Printf("Storage %d sync warning: %v", sid, err)
 		}
