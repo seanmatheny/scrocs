@@ -26,7 +26,12 @@ func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger)
 	if err := dev.OpenSession(); err != nil {
 		return fmt.Errorf("open MTP session: %w", err)
 	}
-	defer dev.CloseSession()
+	// Note: do NOT defer dev.CloseSession() here. dev.Close() (deferred above)
+	// already tears down the session internally using runTransaction (the
+	// unexported path), which suppresses errors silently.  Calling the public
+	// CloseSession() before Close() causes it to go through RunTransaction,
+	// which logs "fatal error LIBUSB_ERROR_NOT_FOUND; closing connection." to
+	// the default logger every time the Kindle ends the session on its side.
 
 	var sids mtp.Uint32Array
 	if err := dev.GetStorageIDs(&sids); err != nil {
