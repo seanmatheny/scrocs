@@ -79,6 +79,7 @@ func main() {
 	ui.updateStep("Connecting", "Establishing MTP connection to Kindle Scribe…")
 	if err := mtpclient.SyncRawKindleFiles(cfg.RawDir, cfg.DevicePattern, logger); err != nil {
 		logger.Printf("sync failed: %v", err)
+		logUSBDeviceDiagnostics(logger)
 		ui.fail(fmt.Sprintf("File transfer failed: %v", err))
 		return
 	}
@@ -324,6 +325,80 @@ func detectKindleIOReg(logger *log.Logger) (bool, bool) {
 		`|"idVendor"\s*=\s*0x1949` +
 		`|"idProduct"\s*=\s*0x9981`)
 	return re.Match(out), true
+}
+
+// logUSBDeviceDiagnostics logs the full IOKit property tree for any Kindle
+// device found in the IOUSBHostDevice plane.  This reveals which IOService
+// children (kernel extensions, user-space clients) have been matched against
+// the device — typically the entity that is "holding" the device and
+// preventing libusb from claiming it.
+//
+// Look for child entries such as:
+//
+//	IOUSBHostInterface      – a USB interface matched by a kernel driver
+//	IOUSBMassStorageInterfaceNub – macOS mass-storage driver (rare for MTP)
+//	com.apple.driver.usb.cdc – CDC/serial driver
+//
+// Any open IOUserClient beneath the device indicates an active claim.
+func logUSBDeviceDiagnostics(logger *log.Logger) {
+	out, err := exec.Command("/usr/sbin/ioreg", "-p", "IOUSB", "-l", "-w", "0").Output()
+	if err != nil {
+		logger.Printf("USB diagnostics: ioreg failed: %v", err)
+		return
+	}
+
+	lines := strings.Split(string(out), "\n")
+
+	// Find the first line that mentions the Kindle device.
+	kindleRe := regexp.MustCompile(`(?i)kindle|scribe`)
+	start := -1
+	for i, line := range lines {
+		if kindleRe.MatchString(line) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		logger.Printf("USB diagnostics: Kindle device not found in ioreg output")
+		return
+	}
+
+	// Determine the indentation depth of the Kindle device line so we can
+	// print everything that belongs to its subtree.
+	kindleLine := lines[start]
+	depth := 0
+	for _, ch := range kindleLine {
+		if ch == ' ' || ch == '|' {
+			depth++
+		} else {
+			break
+		}
+	}
+
+	// Log from the Kindle line until we return to the same or shallower
+	// indentation (i.e. we have left the device subtree).
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		if i > start && len(line) > 0 {
+			// Measure leading whitespace/pipe depth of this line.
+			d := 0
+			for _, ch := range line {
+				if ch == ' ' || ch == '|' {
+					d++
+				} else {
+					break
+				}
+			}
+			// A line at the same or shallower depth (that is not blank and
+			// starts with a tree character) signals we have left the subtree.
+			if d <= depth && (strings.Contains(line, "+-o") || strings.Contains(line, "<class")) {
+				break
+			}
+		}
+		if line != "" {
+			logger.Printf("USB diag: %s", line)
+		}
+	}
 }
 
 // detectKindleSystemProfilerText is the original text-based detection method
