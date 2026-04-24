@@ -26,7 +26,15 @@ const (
 	selectRetryDelay = 3 * time.Second
 )
 
-func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) error {
+func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) (retErr error) {
+	// Safety net: recover from any panic in the MTP/USB layer so the caller
+	// always gets an error instead of a crash.
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = fmt.Errorf("unexpected MTP panic: %v", r)
+		}
+	}()
+
 	dev, err := selectDeviceWithRetry(devicePattern, logger)
 	if err != nil {
 		return fmt.Errorf("select MTP device: %w", err)
@@ -194,7 +202,7 @@ func isSafePath(root, candidate string) bool {
 func selectDeviceWithRetry(pattern string, logger *log.Logger) (*mtp.Device, error) {
 	var lastErr error
 	for attempt := 1; attempt <= selectRetries; attempt++ {
-		dev, err := mtp.SelectDevice(pattern)
+		dev, err := callSelectDevice(pattern)
 		if err == nil {
 			if attempt > 1 {
 				logger.Printf("MTP device selected on attempt %d/%d", attempt, selectRetries)
@@ -209,4 +217,25 @@ func selectDeviceWithRetry(pattern string, logger *log.Logger) (*mtp.Device, err
 		}
 	}
 	return nil, lastErr
+}
+
+// callSelectDevice wraps mtp.SelectDevice and recovers from any panic that
+// originates in the underlying hanwen/usb or libusb layer.
+//
+// The most common trigger on macOS is an empty USB device list: when
+// libusb_get_device_list returns 0 entries, usb.DeviceList.Done() accesses
+// d[0] on a zero-length slice and panics instead of returning an error.
+// This happens when the process lacks the com.apple.security.device.usb
+// entitlement or when a system service (icdd, Photos Agent) is holding an
+// exclusive claim on the device.  Converting the panic to an error lets the
+// retry loop in selectDeviceWithRetry operate normally.
+func callSelectDevice(pattern string) (dev *mtp.Device, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("MTP library panic — libusb returned no USB devices "+
+				"(macOS may be denying USB access; check com.apple.security.device.usb "+
+				"entitlement or wait for icdd to release the device): %v", r)
+		}
+	}()
+	return mtp.SelectDevice(pattern)
 }
