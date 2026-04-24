@@ -15,8 +15,19 @@ import (
 
 const noParentID = 0xFFFFFFFF
 
+// selectRetries is the number of times to attempt SelectDevice before giving
+// up.  On macOS, system services such as icdd (Image Capture Device Daemon)
+// may claim the USB device immediately after it connects, causing the first
+// attempt to fail with LIBUSB_ERROR_NOT_FOUND.  Retrying with a short delay
+// works around this reliably — the same mechanism used by interactive MTP
+// clients such as OpenMTP.
+const (
+	selectRetries    = 5
+	selectRetryDelay = 3 * time.Second
+)
+
 func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) error {
-	dev, err := mtp.SelectDevice(devicePattern)
+	dev, err := selectDeviceWithRetry(devicePattern, logger)
 	if err != nil {
 		return fmt.Errorf("select MTP device: %w", err)
 	}
@@ -174,4 +185,28 @@ func isSafePath(root, candidate string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// selectDeviceWithRetry attempts mtp.SelectDevice up to selectRetries times,
+// waiting selectRetryDelay between each attempt.  On macOS, system services
+// such as icdd (Image Capture Device Daemon) briefly claim the USB device
+// after it connects; retrying with a short pause reliably wins back access.
+func selectDeviceWithRetry(pattern string, logger *log.Logger) (*mtp.Device, error) {
+	var lastErr error
+	for attempt := 1; attempt <= selectRetries; attempt++ {
+		dev, err := mtp.SelectDevice(pattern)
+		if err == nil {
+			if attempt > 1 {
+				logger.Printf("MTP device selected on attempt %d/%d", attempt, selectRetries)
+			}
+			return dev, nil
+		}
+		lastErr = err
+		if attempt < selectRetries {
+			logger.Printf("MTP select attempt %d/%d failed (%v); retrying in %s",
+				attempt, selectRetries, err, selectRetryDelay)
+			time.Sleep(selectRetryDelay)
+		}
+	}
+	return nil, lastErr
 }
