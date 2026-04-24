@@ -213,25 +213,27 @@ type spUSBRoot struct {
 }
 
 // isKindleConnected tries three independent detection methods in order and
-// returns true as soon as any of them succeeds.  Each method logs what it
-// finds so the caller can diagnose failures.
+// returns true as soon as any of them finds a Kindle.  Each method logs what
+// it finds so the caller can diagnose failures.
 //
 // Detection methods (in priority order):
-//  1. system_profiler SPUSBDataType -json  – structured; preferred
-//  2. ioreg -p IOUSB                       – independent of text format
-//  3. system_profiler SPUSBDataType (text) – original fallback
+//  1. ioreg -p IOUSB                       – most reliable for Kindle Scribe
+//  2. system_profiler SPUSBDataType -json   – structured JSON fallback
+//  3. system_profiler SPUSBDataType (text)  – plain-text last resort
 func isKindleConnected(logger *log.Logger) bool {
-	// 1. JSON-based system_profiler (most reliable across macOS versions)
-	if found, ok := detectKindleSystemProfilerJSON(logger); ok {
-		return found
+	// 1. ioreg USB tree: reliably detects the Kindle Scribe even when
+	//    system_profiler cannot see it.  Fall through if ioreg fails to run
+	//    or finds nothing.
+	if found, ok := detectKindleIOReg(logger); ok && found {
+		return true
 	}
 
-	// 2. ioreg USB tree (uses decimal IDs; independent of system_profiler format)
-	if found, ok := detectKindleIOReg(logger); ok {
-		return found
+	// 2. JSON-based system_profiler fallback.
+	if found, ok := detectKindleSystemProfilerJSON(logger); ok && found {
+		return true
 	}
 
-	// 3. Plain-text system_profiler as a last resort
+	// 3. Plain-text system_profiler as a last resort.
 	return detectKindleSystemProfilerText(logger)
 }
 
