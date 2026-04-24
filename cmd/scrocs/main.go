@@ -196,14 +196,15 @@ func acquireLock(lockDir string, logger *log.Logger) (func(), error) {
 }
 
 func isKindleConnected() bool {
-	if _, err := exec.LookPath("system_profiler"); err != nil {
-		return false
-	}
 	out, err := exec.Command("/usr/sbin/system_profiler", "SPUSBDataType").Output()
 	if err != nil {
 		return false
 	}
-	re := regexp.MustCompile(`(?i)Kindle( Scribe)?|Amazon Kindle`)
+	// Match on device name variants ("Kindle", "Scribe") or Amazon's registered
+	// USB vendor ID (0x1949).  The 2024 Kindle Scribe can appear in
+	// system_profiler with just "Scribe" as the product name, or only the
+	// vendor ID to identify it, so all three patterns are needed.
+	re := regexp.MustCompile(`(?i)Kindle|Scribe|0x1949`)
 	return re.Match(out)
 }
 
