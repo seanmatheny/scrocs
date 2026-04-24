@@ -196,14 +196,17 @@ func acquireLock(lockDir string, logger *log.Logger) (func(), error) {
 }
 
 func isKindleConnected() bool {
-	if _, err := exec.LookPath("system_profiler"); err != nil {
-		return false
-	}
 	out, err := exec.Command("/usr/sbin/system_profiler", "SPUSBDataType").Output()
 	if err != nil {
 		return false
 	}
-	re := regexp.MustCompile(`(?i)Kindle( Scribe)?|Amazon Kindle`)
+	// Match on device name variants ("Kindle", "Scribe"), Amazon's registered
+	// USB vendor ID (0x1949), or the confirmed Kindle Scribe product ID
+	// (0x9981).  Confirmed USB identifiers for the 2024 Kindle Scribe:
+	//   Device name:  Kindle Scribe
+	//   Vendor ID:    0x1949  (Amazon)
+	//   Product ID:   0x9981
+	re := regexp.MustCompile(`(?i)Kindle|Scribe|0x1949|0x9981`)
 	return re.Match(out)
 }
 
