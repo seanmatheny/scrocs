@@ -200,11 +200,13 @@ func isKindleConnected() bool {
 	if err != nil {
 		return false
 	}
-	// Match on device name variants ("Kindle", "Scribe") or Amazon's registered
-	// USB vendor ID (0x1949).  The 2024 Kindle Scribe can appear in
-	// system_profiler with just "Scribe" as the product name, or only the
-	// vendor ID to identify it, so all three patterns are needed.
-	re := regexp.MustCompile(`(?i)Kindle|Scribe|0x1949`)
+	// Match on device name variants ("Kindle", "Scribe"), Amazon's registered
+	// USB vendor ID (0x1949), or the confirmed Kindle Scribe product ID
+	// (0x9981).  Confirmed USB identifiers for the 2024 Kindle Scribe:
+	//   Device name:  Kindle Scribe
+	//   Vendor ID:    0x1949  (Amazon)
+	//   Product ID:   0x9981
+	re := regexp.MustCompile(`(?i)Kindle|Scribe|0x1949|0x9981`)
 	return re.Match(out)
 }
 
