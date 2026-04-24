@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -65,7 +66,7 @@ func main() {
 	}
 	defer release()
 
-	if !isKindleConnected() {
+	if !isKindleConnected(logger) {
 		logger.Printf("Kindle Scribe not detected")
 		return
 	}
@@ -195,17 +196,143 @@ func acquireLock(lockDir string, logger *log.Logger) (func(), error) {
 	}, nil
 }
 
-func isKindleConnected() bool {
+// spUSBItem represents a single item in the system_profiler SPUSBDataType JSON tree.
+// Each item may be a bus, hub, or leaf device, and may have nested _items.
+type spUSBItem struct {
+	Name      string      `json:"_name"`
+	VendorID  string      `json:"vendor_id"`
+	ProductID string      `json:"product_id"`
+	Items     []spUSBItem `json:"_items"`
+}
+
+// spUSBRoot is the top-level envelope returned by:
+//
+//	system_profiler SPUSBDataType -json
+type spUSBRoot struct {
+	SPUSBDataType []spUSBItem `json:"SPUSBDataType"`
+}
+
+// isKindleConnected tries three independent detection methods in order and
+// returns true as soon as any of them succeeds.  Each method logs what it
+// finds so the caller can diagnose failures.
+//
+// Detection methods (in priority order):
+//  1. system_profiler SPUSBDataType -json  – structured; preferred
+//  2. ioreg -p IOUSB                       – independent of text format
+//  3. system_profiler SPUSBDataType (text) – original fallback
+func isKindleConnected(logger *log.Logger) bool {
+	// 1. JSON-based system_profiler (most reliable across macOS versions)
+	if found, ok := detectKindleSystemProfilerJSON(logger); ok {
+		return found
+	}
+
+	// 2. ioreg USB tree (uses decimal IDs; independent of system_profiler format)
+	if found, ok := detectKindleIOReg(logger); ok {
+		return found
+	}
+
+	// 3. Plain-text system_profiler as a last resort
+	return detectKindleSystemProfilerText(logger)
+}
+
+// detectKindleSystemProfilerJSON runs system_profiler with -json and walks the
+// nested USB device tree.  It returns (result, true) on success, or (false,
+// false) if the command fails or the output cannot be parsed.
+func detectKindleSystemProfilerJSON(logger *log.Logger) (bool, bool) {
+	out, err := exec.Command("/usr/sbin/system_profiler", "SPUSBDataType", "-json").Output()
+	if err != nil {
+		logger.Printf("USB detection (JSON): system_profiler failed: %v", err)
+		return false, false
+	}
+
+	var root spUSBRoot
+	if err := json.Unmarshal(out, &root); err != nil {
+		logger.Printf("USB detection (JSON): parse failed: %v", err)
+		return false, false
+	}
+
+	found := walkUSBItems(root.SPUSBDataType, logger)
+	return found, true
+}
+
+// walkUSBItems recursively searches a slice of USB items for any Kindle device.
+func walkUSBItems(items []spUSBItem, logger *log.Logger) bool {
+	for _, item := range items {
+		if item.Name != "" || item.VendorID != "" || item.ProductID != "" {
+			logger.Printf("USB device (JSON): name=%q vendor=%q product=%q",
+				item.Name, item.VendorID, item.ProductID)
+		}
+		if isKindleUSBDevice(item.Name, item.VendorID, item.ProductID) {
+			return true
+		}
+		if walkUSBItems(item.Items, logger) {
+			return true
+		}
+	}
+	return false
+}
+
+// isKindleUSBDevice returns true if any of the provided USB fields identify an
+// Amazon Kindle device.
+//
+// Confirmed Kindle Scribe USB identifiers:
+//
+//	Device name: Kindle Scribe
+//	Vendor ID:   0x1949  (Amazon Technologies Inc.) — decimal 6473
+//	Product ID:  0x9981                              — decimal 39297
+func isKindleUSBDevice(name, vendorID, productID string) bool {
+	if regexp.MustCompile(`(?i)kindle|scribe`).MatchString(name) {
+		return true
+	}
+	// vendor_id field may appear as "0x1949", "0x1949 (Amazon…)", or "6473"
+	if strings.Contains(vendorID, "1949") || strings.Contains(vendorID, "6473") {
+		return true
+	}
+	// product_id field may appear as "0x9981" or "39297"
+	if strings.Contains(productID, "9981") || strings.Contains(productID, "39297") {
+		return true
+	}
+	return false
+}
+
+// detectKindleIOReg queries the IOKit USB plane via ioreg, which reports vendor
+// and product IDs as decimal integers.  It returns (result, true) on success,
+// or (false, false) if ioreg is not available.
+//
+// Amazon vendor ID 0x1949 = 6473 decimal
+// Kindle Scribe product ID 0x9981 = 39297 decimal
+func detectKindleIOReg(logger *log.Logger) (bool, bool) {
+	out, err := exec.Command("/usr/sbin/ioreg", "-p", "IOUSB", "-l", "-w", "0").Output()
+	if err != nil {
+		logger.Printf("USB detection (ioreg): command failed: %v", err)
+		return false, false
+	}
+
+	// Log every line that looks like a device name for diagnostics.
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "+-o ") {
+			logger.Printf("USB device (ioreg): %s", strings.TrimSpace(line))
+		}
+	}
+
+	// ioreg uses decimal values; also match hex strings for robustness.
+	re := regexp.MustCompile(`(?i)kindle|scribe` +
+		`|"idVendor"\s*=\s*6473` +
+		`|"idProduct"\s*=\s*39297` +
+		`|"idVendor"\s*=\s*0x1949` +
+		`|"idProduct"\s*=\s*0x9981`)
+	return re.Match(out), true
+}
+
+// detectKindleSystemProfilerText is the original text-based detection method
+// kept as a last-resort fallback.
+func detectKindleSystemProfilerText(logger *log.Logger) bool {
 	out, err := exec.Command("/usr/sbin/system_profiler", "SPUSBDataType").Output()
 	if err != nil {
+		logger.Printf("USB detection (text): system_profiler failed: %v", err)
 		return false
 	}
-	// Match on device name variants ("Kindle", "Scribe"), Amazon's registered
-	// USB vendor ID (0x1949), or the confirmed Kindle Scribe product ID
-	// (0x9981).  Confirmed USB identifiers for the 2024 Kindle Scribe:
-	//   Device name:  Kindle Scribe
-	//   Vendor ID:    0x1949  (Amazon)
-	//   Product ID:   0x9981
+	logger.Printf("USB detection (text): system_profiler output length=%d bytes", len(out))
 	re := regexp.MustCompile(`(?i)Kindle|Scribe|0x1949|0x9981`)
 	return re.Match(out)
 }
