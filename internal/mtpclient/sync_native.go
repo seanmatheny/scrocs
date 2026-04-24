@@ -37,8 +37,8 @@ func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger)
 	var lastErr error
 	for attempt := 1; attempt <= mtpMaxAttempts; attempt++ {
 		if attempt > 1 {
-			logger.Printf("MTP connection attempt %d/%d (waiting %v before retry)…", attempt, mtpMaxAttempts, mtpRetryDelay)
 			time.Sleep(mtpRetryDelay)
+			logger.Printf("MTP connection attempt %d/%d…", attempt, mtpMaxAttempts)
 		}
 		lastErr = syncOnce(rawDir, devicePattern, logger)
 		if lastErr == nil {
