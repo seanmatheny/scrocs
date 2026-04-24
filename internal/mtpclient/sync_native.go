@@ -15,41 +15,7 @@ import (
 
 const noParentID = 0xFFFFFFFF
 
-// mtpConnectDelay is how long to wait before the first MTP connection attempt.
-// macOS media drivers (e.g. iMTPd / AMSMobileDeviceService) briefly claim the
-// USB interface when a device is first enumerated.  Waiting a few seconds lets
-// those drivers finish so that libusb can claim the interface cleanly.
-const mtpConnectDelay = 3 * time.Second
-
-// mtpMaxAttempts is the total number of MTP connection attempts to make.
-const mtpMaxAttempts = 3
-
-// mtpRetryDelay is how long to wait between successive connection attempts.
-const mtpRetryDelay = 5 * time.Second
-
-// SyncRawKindleFiles connects to the Kindle via MTP and copies wanted files
-// under rawDir.  It waits briefly before the first attempt (to avoid a race
-// with macOS media drivers) and retries on transient connection failures.
 func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) error {
-	// Allow macOS media drivers to finish their initial access of the device.
-	time.Sleep(mtpConnectDelay)
-
-	var lastErr error
-	for attempt := 1; attempt <= mtpMaxAttempts; attempt++ {
-		if attempt > 1 {
-			time.Sleep(mtpRetryDelay)
-			logger.Printf("MTP connection attempt %d/%d…", attempt, mtpMaxAttempts)
-		}
-		lastErr = syncOnce(rawDir, devicePattern, logger)
-		if lastErr == nil {
-			return nil
-		}
-		logger.Printf("MTP attempt %d/%d failed: %v", attempt, mtpMaxAttempts, lastErr)
-	}
-	return lastErr
-}
-
-func syncOnce(rawDir string, devicePattern string, logger *log.Logger) error {
 	dev, err := mtp.SelectDevice(devicePattern)
 	if err != nil {
 		return fmt.Errorf("select MTP device: %w", err)
@@ -60,7 +26,12 @@ func syncOnce(rawDir string, devicePattern string, logger *log.Logger) error {
 	if err := dev.OpenSession(); err != nil {
 		return fmt.Errorf("open MTP session: %w", err)
 	}
-	defer dev.CloseSession()
+	// Note: do NOT defer dev.CloseSession() here. dev.Close() (deferred above)
+	// already tears down the session internally using runTransaction (the
+	// unexported path), which suppresses errors silently.  Calling the public
+	// CloseSession() before Close() causes it to go through RunTransaction,
+	// which logs "fatal error LIBUSB_ERROR_NOT_FOUND; closing connection." to
+	// the default logger every time the Kindle ends the session on its side.
 
 	var sids mtp.Uint32Array
 	if err := dev.GetStorageIDs(&sids); err != nil {
