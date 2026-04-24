@@ -349,17 +349,29 @@ func logUSBDeviceDiagnostics(logger *log.Logger) {
 
 	lines := strings.Split(string(out), "\n")
 
-	// Find the first line that mentions the Kindle device.
-	kindleRe := regexp.MustCompile(`(?i)kindle|scribe`)
+	// Find the first device-node line (containing "+-o") that names a Kindle.
+	// We restrict matching to "+-o" lines so that the regex cannot accidentally
+	// match the string "kindle" inside a property value — notably the huge
+	// "IOKitDiagnostics" dictionary on the root IORegistryEntry that enumerates
+	// all registered IOKit class names, some of which contain "Kindle".
+	kindleDevRe := regexp.MustCompile(`\+-o[^\n]*(?i:kindle|scribe)`)
 	start := -1
 	for i, line := range lines {
-		if kindleRe.MatchString(line) {
+		if kindleDevRe.MatchString(line) {
 			start = i
 			break
 		}
 	}
 	if start == -1 {
 		logger.Printf("USB diagnostics: Kindle device not found in ioreg output")
+		// Log all device-node lines so there is still useful context about
+		// what IS on the USB bus at the time of the failure.
+		deviceRe := regexp.MustCompile(`\+-o `)
+		for _, line := range lines {
+			if deviceRe.MatchString(line) {
+				logger.Printf("USB diag (bus): %s", strings.TrimSpace(line))
+			}
+		}
 		return
 	}
 

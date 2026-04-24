@@ -22,8 +22,8 @@ const noParentID = 0xFFFFFFFF
 // works around this reliably — the same mechanism used by interactive MTP
 // clients such as OpenMTP.
 const (
-	selectRetries    = 5
-	selectRetryDelay = 3 * time.Second
+	selectRetries    = 10
+	selectRetryDelay = 5 * time.Second
 )
 
 func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) (retErr error) {
