@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,20 @@ const (
 	selectRetries    = 10
 	selectRetryDelay = 5 * time.Second
 )
+
+type storageSyncStats struct {
+	Scanned        int
+	Wanted         int
+	Synced         int
+	ExtensionCount map[string]int
+	SkippedSamples []string
+}
+
+func newStorageSyncStats() *storageSyncStats {
+	return &storageSyncStats{
+		ExtensionCount: make(map[string]int),
+	}
+}
 
 func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger) (retErr error) {
 	// Safety net: recover from any panic in the MTP/USB layer so the caller
@@ -68,15 +83,17 @@ func SyncRawKindleFiles(rawDir string, devicePattern string, logger *log.Logger)
 			continue
 		}
 		logger.Printf("Syncing storage %d (%q)", sid, si.StorageDescription)
-		if err := syncFolder(dev, sid, noParentID, "", rawDir, logger); err != nil {
+		stats := newStorageSyncStats()
+		if err := syncFolder(dev, sid, noParentID, "", rawDir, logger, stats); err != nil {
 			logger.Printf("Storage %d sync warning: %v", sid, err)
 		}
+		logStorageSummary(logger, sid, si.StorageDescription, stats)
 	}
 
 	return nil
 }
 
-func syncFolder(dev *mtp.Device, storageID uint32, parent uint32, rel string, rawDir string, logger *log.Logger) error {
+func syncFolder(dev *mtp.Device, storageID uint32, parent uint32, rel string, rawDir string, logger *log.Logger, stats *storageSyncStats) error {
 	var handles mtp.Uint32Array
 	if err := dev.GetObjectHandles(storageID, 0, parent, &handles); err != nil {
 		return fmt.Errorf("GetObjectHandles(parent=%d): %w", parent, err)
@@ -92,17 +109,27 @@ func syncFolder(dev *mtp.Device, storageID uint32, parent uint32, rel string, ra
 		if name == "" {
 			continue
 		}
+		stats.Scanned++
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == "" {
+			ext = "<none>"
+		}
+		stats.ExtensionCount[ext]++
 		nextRel := filepath.Join(rel, name)
 
 		if obj.ObjectFormat == mtp.OFC_Association {
-			if err := syncFolder(dev, storageID, handle, nextRel, rawDir, logger); err != nil {
+			if err := syncFolder(dev, storageID, handle, nextRel, rawDir, logger, stats); err != nil {
 				logger.Printf("Folder sync warning for %s: %v", nextRel, err)
 			}
 			continue
 		}
 		if !isWantedFile(nextRel) {
+			if len(stats.SkippedSamples) < 20 {
+				stats.SkippedSamples = append(stats.SkippedSamples, nextRel)
+			}
 			continue
 		}
+		stats.Wanted++
 
 		dest := filepath.Join(rawDir, nextRel)
 		if !isSafePath(rawDir, dest) {
@@ -142,15 +169,68 @@ func syncFolder(dev *mtp.Device, storageID uint32, parent uint32, rel string, ra
 		if !obj.ModificationDate.IsZero() {
 			_ = os.Chtimes(dest, time.Now(), obj.ModificationDate)
 		}
+		stats.Synced++
 		logger.Printf("Synced %s", nextRel)
 	}
 
 	return nil
 }
 
+func logStorageSummary(logger *log.Logger, storageID uint32, storageName string, stats *storageSyncStats) {
+	logger.Printf("Storage %d (%q) summary: scanned=%d wanted=%d synced=%d",
+		storageID, storageName, stats.Scanned, stats.Wanted, stats.Synced)
+
+	type extCount struct {
+		Ext   string
+		Count int
+	}
+
+	all := make([]extCount, 0, len(stats.ExtensionCount))
+	for ext, count := range stats.ExtensionCount {
+		all = append(all, extCount{Ext: ext, Count: count})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Count == all[j].Count {
+			return all[i].Ext < all[j].Ext
+		}
+		return all[i].Count > all[j].Count
+	})
+
+	limit := 10
+	if len(all) < limit {
+		limit = len(all)
+	}
+	if limit > 0 {
+		parts := make([]string, 0, limit)
+		for i := 0; i < limit; i++ {
+			parts = append(parts, fmt.Sprintf("%s=%d", all[i].Ext, all[i].Count))
+		}
+		logger.Printf("Storage %d extension histogram (top %d): %s", storageID, limit, strings.Join(parts, ", "))
+	}
+
+	if len(stats.SkippedSamples) > 0 {
+		logger.Printf("Storage %d skipped sample files: %s", storageID, strings.Join(stats.SkippedSamples, ", "))
+	}
+}
+
 func isWantedFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".notebook" || ext == ".note" || ext == ".pdf"
+	normalized := filepath.ToSlash(strings.ToLower(path))
+	ext := strings.ToLower(filepath.Ext(normalized))
+	if ext == ".notebook" || ext == ".note" || ext == ".pdf" {
+		return true
+	}
+	if strings.HasPrefix(normalized, ".notebooks/") {
+		// Kindle Scribe notebook payloads are stored under .notebooks with
+		// mostly extension-less filenames. Exclude obvious caches/backups.
+		if strings.Contains(normalized, "/thumbnails/") ||
+			strings.Contains(normalized, "/page_cache/") ||
+			strings.Contains(normalized, "/.backups/") ||
+			strings.Contains(normalized, "/clipboard/") {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func isObjectCurrent(dest string, obj *mtp.ObjectInfo) bool {
