@@ -46,6 +46,8 @@ Useful environment variables:
 - `SCROCS_LOG_FILE`
 - `SCROCS_MTP_PATTERN` (default `(?i)kindle`)
 - `SCROCS_EBOOK_CONVERT` (optional absolute path to `ebook-convert`)
+- `SCROCS_CALIBRE_CUSTOMIZE` (optional absolute path to `calibre-customize`)
+- `SCROCS_NBK_PREFLIGHT` (optional: `1/true` enables plugin status preflight logging before conversion)
 
 ## Notes
 
@@ -53,4 +55,5 @@ Useful environment variables:
 - `.pdf` files are copied directly.
 - `.notebook` and `.note` files are converted by extracting embedded PDF content when present; otherwise embedded images are rendered into a PDF.
 - `.nbk` files are converted via Calibre `ebook-convert`; this requires an NBK input plugin to be installed in Calibre.
+- The `KFX Input` plugin is for Amazon KFX books and does not itself provide NBK notebook conversion support.
 - If native MTP support is unavailable at build time, the binary exits with a clear message to rebuild using `-tags mtp`.

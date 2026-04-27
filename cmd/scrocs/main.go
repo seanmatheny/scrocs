@@ -34,6 +34,7 @@ type config struct {
 	PDFDir        string
 	StateFile     string
 	DevicePattern string
+	NBKPreflight  bool
 }
 
 var (
@@ -107,6 +108,14 @@ func main() {
 	if len(rawFiles) > 0 {
 		ui.updateStep("Converting", fmt.Sprintf("Converting %d file(s) to PDF…", len(rawFiles)))
 	}
+	if cfg.NBKPreflight && hasNBKPayload(rawFiles) {
+		ui.updateStep("Preflight", "Checking Calibre NBK plugin status…")
+		if err := preflightNBKConversion(logger); err != nil {
+			logger.Printf("NBK preflight failed: %v", err)
+			ui.fail(fmt.Sprintf("NBK preflight failed: %v", err))
+			return
+		}
+	}
 
 	imported := 0
 	for _, rawFile := range rawFiles {
@@ -161,6 +170,7 @@ func loadConfig() config {
 		PDFDir:        getenvDefault("SCROCS_PDF_DIR", filepath.Join(home, "pdf")),
 		StateFile:     getenvDefault("SCROCS_STATE_FILE", filepath.Join(home, "imported.sha256")),
 		DevicePattern: getenvDefault("SCROCS_MTP_PATTERN", "(?i)kindle"),
+		NBKPreflight:  getenvBool("SCROCS_NBK_PREFLIGHT", false),
 	}
 }
 
@@ -169,6 +179,21 @@ func getenvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvBool(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func fatalf(format string, args ...any) {
@@ -459,6 +484,15 @@ func listRawFiles(root string) ([]string, error) {
 	return files, nil
 }
 
+func hasNBKPayload(files []string) bool {
+	for _, file := range files {
+		if isNBKPayloadFile(file, strings.ToLower(filepath.Base(file))) {
+			return true
+		}
+	}
+	return false
+}
+
 func convertToPDF(inputFile, rawRoot, pdfRoot string, logger *log.Logger) (string, error) {
 	rel, err := filepath.Rel(rawRoot, inputFile)
 	if err != nil {
@@ -559,6 +593,38 @@ func findCalibreTool(toolName, envVar string) (string, error) {
 	}
 
 	return "", fmt.Errorf("calibre tool %q not found (set %s to its path)", toolName, envVar)
+}
+
+func preflightNBKConversion(logger *log.Logger) error {
+	ebookConvert, err := findCalibreTool("ebook-convert", "SCROCS_EBOOK_CONVERT")
+	if err != nil {
+		return err
+	}
+	logger.Printf("NBK preflight: ebook-convert=%s", ebookConvert)
+
+	calibreCustomize, err := findCalibreTool("calibre-customize", "SCROCS_CALIBRE_CUSTOMIZE")
+	if err != nil {
+		logger.Printf("NBK preflight: calibre-customize not found: %v", err)
+	} else {
+		out, cmdErr := exec.Command(calibreCustomize, "-l").CombinedOutput()
+		if cmdErr != nil {
+			logger.Printf("NBK preflight: calibre-customize -l failed: %v", cmdErr)
+		} else {
+			listing := strings.ToLower(string(out))
+			hasKFX := strings.Contains(listing, "conversion input      kfx input")
+			hasNBK := strings.Contains(listing, "conversion input") && strings.Contains(listing, "nbk")
+			logger.Printf("NBK preflight: plugin listing contains KFX Input=%t, NBK conversion input=%t", hasKFX, hasNBK)
+			if hasKFX && !hasNBK {
+				logger.Printf("NBK preflight: KFX Input plugin does not add NBK support; a dedicated NBK conversion input plugin is required")
+			}
+		}
+	}
+
+	if err := ensureNBKSupport(ebookConvert); err != nil {
+		return err
+	}
+	logger.Printf("NBK preflight: NBK input plugin support confirmed")
+	return nil
 }
 
 func ensureNBKSupport(ebookConvert string) error {
