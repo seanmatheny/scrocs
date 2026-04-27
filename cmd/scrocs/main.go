@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/jung-kurt/gofpdf"
@@ -34,6 +35,11 @@ type config struct {
 	StateFile     string
 	DevicePattern string
 }
+
+var (
+	nbkSupportCheckOnce sync.Once
+	nbkSupportCheckErr  error
+)
 
 func main() {
 	cfg := loadConfig()
@@ -107,6 +113,10 @@ func main() {
 		pdfFile, err := convertToPDF(rawFile, cfg.RawDir, cfg.PDFDir, logger)
 		if err != nil {
 			logger.Printf("convert failed for %s: %v", rawFile, err)
+			if isNBKPluginMissingErr(err) {
+				ui.fail("NBK conversion plugin missing in Calibre. Install a Kindle Scribe NBK input plugin, then run sync again.")
+				return
+			}
 			continue
 		}
 
@@ -436,7 +446,8 @@ func listRawFiles(root string) ([]string, error) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".notebook" || ext == ".note" || ext == ".pdf" {
+		base := strings.ToLower(filepath.Base(path))
+		if ext == ".notebook" || ext == ".note" || ext == ".pdf" || isNBKPayloadFile(path, base) {
 			files = append(files, path)
 		}
 		return nil
@@ -465,8 +476,16 @@ func convertToPDF(inputFile, rawRoot, pdfRoot string, logger *log.Logger) (strin
 	}
 
 	ext := strings.ToLower(filepath.Ext(inputFile))
+	base := strings.ToLower(filepath.Base(inputFile))
 	if ext == ".pdf" {
 		if err := copyFile(inputFile, output); err != nil {
+			return "", err
+		}
+		return output, nil
+	}
+
+	if isNBKPayloadFile(inputFile, base) {
+		if err := convertNBKToPDF(inputFile, output, logger); err != nil {
 			return "", err
 		}
 		return output, nil
@@ -476,6 +495,107 @@ func convertToPDF(inputFile, rawRoot, pdfRoot string, logger *log.Logger) (strin
 		return "", err
 	}
 	return output, nil
+}
+
+func isNBKPayloadFile(path, base string) bool {
+	if base != "nbk" {
+		return false
+	}
+	// Kindle Scribe MTP exports notebook payloads in hidden .notebooks trees.
+	return strings.Contains(filepath.ToSlash(path), "/.notebooks/")
+}
+
+func convertNBKToPDF(inputFile, outputFile string, logger *log.Logger) error {
+	ebookConvert, err := findCalibreTool("ebook-convert", "SCROCS_EBOOK_CONVERT")
+	if err != nil {
+		return err
+	}
+	if err := ensureNBKSupport(ebookConvert); err != nil {
+		return err
+	}
+
+	tempDir, err := os.MkdirTemp("", "scrocs-nbk-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempDir)
+
+	tmpInput := filepath.Join(tempDir, "input.nbk")
+	if err := copyFile(inputFile, tmpInput); err != nil {
+		return err
+	}
+
+	cmd := exec.Command(ebookConvert, tmpInput, outputFile)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(out))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("ebook-convert failed for %s: %s", inputFile, message)
+	}
+
+	logger.Printf("Converted %s via calibre NBK", filepath.Base(inputFile))
+	return nil
+}
+
+func findCalibreTool(toolName, envVar string) (string, error) {
+	if override := strings.TrimSpace(os.Getenv(envVar)); override != "" {
+		if _, err := os.Stat(override); err == nil {
+			return override, nil
+		}
+		if resolved, err := exec.LookPath(override); err == nil {
+			return resolved, nil
+		}
+		return "", fmt.Errorf("%s points to missing tool: %s", envVar, override)
+	}
+
+	bundlePath := filepath.Join("/Applications/calibre.app/Contents/MacOS", toolName)
+	if _, err := os.Stat(bundlePath); err == nil {
+		return bundlePath, nil
+	}
+	if resolved, err := exec.LookPath(toolName); err == nil {
+		return resolved, nil
+	}
+
+	return "", fmt.Errorf("calibre tool %q not found (set %s to its path)", toolName, envVar)
+}
+
+func ensureNBKSupport(ebookConvert string) error {
+	nbkSupportCheckOnce.Do(func() {
+		tempDir, err := os.MkdirTemp("", "scrocs-nbk-check-*")
+		if err != nil {
+			nbkSupportCheckErr = err
+			return
+		}
+		defer os.RemoveAll(tempDir)
+
+		tmpInput := filepath.Join(tempDir, "probe.nbk")
+		tmpOutput := filepath.Join(tempDir, "probe.pdf")
+		if err := os.WriteFile(tmpInput, []byte{}, 0o644); err != nil {
+			nbkSupportCheckErr = err
+			return
+		}
+
+		out, err := exec.Command(ebookConvert, tmpInput, tmpOutput).CombinedOutput()
+		if err == nil {
+			return
+		}
+
+		msg := strings.ToLower(string(out))
+		if strings.Contains(msg, "no plugin to handle input format: nbk") {
+			nbkSupportCheckErr = fmt.Errorf("calibre is installed but missing an NBK input plugin; install a Kindle Scribe notebook (.nbk) input plugin in Calibre")
+			return
+		}
+	})
+	return nbkSupportCheckErr
+}
+
+func isNBKPluginMissingErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "missing an nbk input plugin")
 }
 
 func upToDate(input, output string) bool {
